@@ -1,5 +1,9 @@
-/* CHAEN POS → Google Sheets 連携モジュール (v1.18)
-   デプロイ後に URL / TOKEN を設定。STOREは店舗が増えたら端末ごとに変更。 */
+/* CHAEN POS → Google Sheets 連携モジュール (v1.22)
+   デプロイ後に URL / TOKEN を設定。STOREは店舗が増えたら端末ごとに変更。
+   v1.20: 同じレジをシフト交代で共有する運用に対応。注文・経費に時刻を送信し、
+   fetchTodayData() で本日分の注文・経費をまとめて取得できるようにした。
+   v1.21: 注文に対応スタッフ名(rec.staff)を送信するようにした。
+   v1.22: 経費にも記録スタッフ名(rec.staff)を送信するようにした。 */
 const SheetSync = (() => {
   const CONFIG = {
     URL: 'https://script.google.com/macros/s/AKfycbzm3znIf4AtO3u3tG7EZQ634M_7tHNGk3O8rWXNSLc_bziA0VTLIJKmKjEZrLOIgRV80Q/exec', // ← Apps ScriptのウェブアプリURL
@@ -43,6 +47,15 @@ const SheetSync = (() => {
     'Other': 'Other / その他',
   };
 
+  // RECIPE_IDS の逆引き('SIG12' → {name:'Signature Matcha Latte', size:'12oz'})
+  // 他端末の注文をPOS画面用に復元する際に使う
+  const RECIPE_LOOKUP = Object.fromEntries(
+    Object.entries(RECIPE_IDS).map(([key, id]) => {
+      const [name, size] = key.split('|');
+      return [id, { name, size }];
+    })
+  );
+
   const QUEUE_KEY = 'chaen_sheet_queue';
 
   function itemsToRows(items) {
@@ -82,29 +95,48 @@ const SheetSync = (() => {
     }
   }
 
+  // 同じSTOREの「本日分」の注文・経費をまとめて取得
+  // (シフト交代で端末が変わっても、その日のデータをこの端末にも取り込むため)
+  // 失敗時は空を返す(通信エラーでPOS本体の動作を止めないため)
+  async function fetchTodayData() {
+    if (!CONFIG.ENABLED) return { orders: [], expenses: [] };
+    try {
+      const url = `${CONFIG.URL}?action=today&token=${encodeURIComponent(CONFIG.TOKEN)}&store=${encodeURIComponent(CONFIG.STORE)}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || 'fetch error');
+      return { orders: j.orders || [], expenses: j.expenses || [] };
+    } catch (err) {
+      console.warn('SheetSync fetchTodayData failed:', err);
+      return { orders: [], expenses: [] };
+    }
+  }
+
   window.addEventListener('online', flushQueue);
   window.addEventListener('load', flushQueue);
 
   return {
+    recipeLookup: RECIPE_LOOKUP,
+    fetchTodayData,
     orderAdd(rec) {
       post({ type: 'order_add', orderId: rec.id, store: CONFIG.STORE,
-             date: rec.date, pay: rec.payment, items: itemsToRows(rec.items) });
+             date: rec.date, time: rec.time || '', staff: rec.staff || '', pay: rec.payment, items: itemsToRows(rec.items) });
     },
     orderEdit(rec) {
       post({ type: 'order_edit', orderId: rec.id, store: CONFIG.STORE,
-             date: rec.date, pay: rec.payment, items: itemsToRows(rec.items) });
+             date: rec.date, time: rec.time || '', staff: rec.staff || '', pay: rec.payment, items: itemsToRows(rec.items) });
     },
     orderDelete(id) {
       post({ type: 'order_delete', orderId: id });
     },
     expenseAdd(rec) {
-      post({ type: 'expense', expenseId: rec.id, store: CONFIG.STORE, date: rec.date,
+      post({ type: 'expense', expenseId: rec.id, store: CONFIG.STORE, date: rec.date, time: rec.time || '', staff: rec.staff || '',
              category: EXPENSE_CATS[rec.category] || 'Other / その他',
              item: rec.category, amount: rec.amount, pay: rec.payment,
              notes: rec.memo || '' });
     },
     expenseEdit(rec) {
-      post({ type: 'expense_edit', expenseId: rec.id, store: CONFIG.STORE, date: rec.date,
+      post({ type: 'expense_edit', expenseId: rec.id, store: CONFIG.STORE, date: rec.date, time: rec.time || '', staff: rec.staff || '',
              category: EXPENSE_CATS[rec.category] || 'Other / その他',
              item: rec.category, amount: rec.amount, pay: rec.payment,
              notes: rec.memo || '' });
