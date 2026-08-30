@@ -465,3 +465,14 @@ hr{border:0;border-top:2px dashed var(--line);margin:14px 0}
 @media(min-width:700px){
   .recipe-grid{grid-template-columns:repeat(2,1fr)}
 }
+
+
+/* ── 商品カテゴリータブ / 商品リストの取得状況 (v1.23) ── */
+.menu-tabs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;-webkit-overflow-scrolling:touch}
+.menu-tab{flex:0 0 auto;padding:7px 14px;border-radius:999px;border:1px solid rgba(40,92,61,.25);
+  background:#fff;color:#285c3d;font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap}
+.menu-tab.active{background:#285c3d;color:#fff;border-color:#285c3d}
+.menu-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:14px 0 4px}
+.menu-meta .muted{font-size:12px}
+.menu-warn{font-size:11px;font-weight:700;color:#a4432f;background:#fdeae5;border-radius:6px;padding:2px 7px}
+.menu-refresh-btn{margin-left:auto;padding:7px 12px;font-size:13px}
