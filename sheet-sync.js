@@ -1,9 +1,13 @@
-/* CHAEN POS → Google Sheets 連携モジュール (v1.22)
+/* CHAEN POS → Google Sheets 連携モジュール (v1.23)
    デプロイ後に URL / TOKEN を設定。STOREは店舗が増えたら端末ごとに変更。
    v1.20: 同じレジをシフト交代で共有する運用に対応。注文・経費に時刻を送信し、
    fetchTodayData() で本日分の注文・経費をまとめて取得できるようにした。
    v1.21: 注文に対応スタッフ名(rec.staff)を送信するようにした。
-   v1.22: 経費にも記録スタッフ名(rec.staff)を送信するようにした。 */
+   v1.22: 経費にも記録スタッフ名(rec.staff)を送信するようにした。
+   v1.23: 商品マスターをシートに一本化。fetchProducts() で Recipe Master の
+          商品リストを取得し、localStorageにキャッシュする。取得できた場合は
+          Recipe ID の対応表もシート由来のものを優先して使う(下の RECIPE_IDS は
+          初回起動時・通信不能時のフォールバックとして残す)。 */
 const SheetSync = (() => {
   const CONFIG = {
     URL: 'https://script.google.com/macros/s/AKfycbzm3znIf4AtO3u3tG7EZQ634M_7tHNGk3O8rWXNSLc_bziA0VTLIJKmKjEZrLOIgRV80Q/exec', // ← Apps ScriptのウェブアプリURL
@@ -57,10 +61,22 @@ const SheetSync = (() => {
   );
 
   const QUEUE_KEY = 'chaen_sheet_queue';
+  const MENU_KEY  = 'chaen_menu_cache';
+
+  /* シートから取得した 商品名|サイズ → Recipe ID。取得できるまでは null。 */
+  let dynamicIds = null;
+  /* シートから取得した Recipe ID → {name,size}。 */
+  let dynamicLookup = null;
+
+  function recipeIdFor(name, size) {
+    const key = `${name}|${size}`;
+    if (dynamicIds && dynamicIds[key]) return dynamicIds[key];
+    return RECIPE_IDS[key] || `??${name}`;
+  }
 
   function itemsToRows(items) {
     return items.map(it => ({
-      recipeId: RECIPE_IDS[`${it.name}|${it.size}`] || `??${it.name}`,
+      recipeId: recipeIdFor(it.name, it.size),
       qty: it.qty,
       promo: it.discount ? it.qty : 0, // -₱30割引を使った杯数
     }));
@@ -95,6 +111,48 @@ const SheetSync = (() => {
     }
   }
 
+  /* Recipe Master の商品リストを取得して localStorage にキャッシュする。
+     戻り値 {updatedAt, fetchedAt, products:[{id,name,size,category,price}]}
+     通信失敗時は例外を投げる(呼び出し側でキャッシュにフォールバックする)。 */
+  async function fetchProducts() {
+    if (!CONFIG.ENABLED) throw new Error('sheet sync disabled');
+    const url = `${CONFIG.URL}?action=products&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'products fetch error');
+    const products = j.products || [];
+    if (!products.length) throw new Error('empty product list');
+    const payload = { updatedAt: j.updatedAt || '', fetchedAt: new Date().toISOString(), products };
+    try { localStorage.setItem(MENU_KEY, JSON.stringify(payload)); } catch (e) { /* 容量超過は無視 */ }
+    applyProducts(products);
+    return payload;
+  }
+
+  /* キャッシュ済みの商品リストを返す(なければ null) */
+  function cachedProducts() {
+    try {
+      const v = JSON.parse(localStorage.getItem(MENU_KEY) || 'null');
+      if (v && Array.isArray(v.products) && v.products.length) { applyProducts(v.products); return v; }
+    } catch (e) { /* 壊れたキャッシュは無視 */ }
+    return null;
+  }
+
+  /* 商品リストから Recipe ID の対応表を作り直す */
+  function applyProducts(products) {
+    const ids = {}, lookup = {};
+    products.forEach(p => {
+      ids[`${p.name}|${p.size}`] = p.id;
+      lookup[p.id] = { name: p.name, size: p.size };
+    });
+    dynamicIds = ids;
+    dynamicLookup = lookup;
+  }
+
+  /* Recipe ID → {name,size}。シート由来を優先し、無ければ内蔵表を使う。 */
+  function lookupRecipe(id) {
+    return (dynamicLookup && dynamicLookup[id]) || RECIPE_LOOKUP[id] || null;
+  }
+
   // 同じSTOREの「本日分」の注文・経費をまとめて取得
   // (シフト交代で端末が変わっても、その日のデータをこの端末にも取り込むため)
   // 失敗時は空を返す(通信エラーでPOS本体の動作を止めないため)
@@ -116,7 +174,10 @@ const SheetSync = (() => {
   window.addEventListener('load', flushQueue);
 
   return {
-    recipeLookup: RECIPE_LOOKUP,
+    recipeLookup: RECIPE_LOOKUP,   // 内蔵フォールバック表(後方互換のため残す)
+    lookupRecipe,                  // シート由来を優先した逆引き
+    fetchProducts,
+    cachedProducts,
     fetchTodayData,
     orderAdd(rec) {
       post({ type: 'order_add', orderId: rec.id, store: CONFIG.STORE,
