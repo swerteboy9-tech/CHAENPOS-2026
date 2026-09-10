@@ -476,3 +476,21 @@ hr{border:0;border-top:2px dashed var(--line);margin:14px 0}
 .menu-meta .muted{font-size:12px}
 .menu-warn{font-size:11px;font-weight:700;color:#a4432f;background:#fdeae5;border-radius:6px;padding:2px 7px}
 .menu-refresh-btn{margin-left:auto;padding:7px 12px;font-size:13px}
+
+
+/* ── 経費プリセット / 在庫 (v1.24) ── */
+.preset-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:12px}
+.preset-card{display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+  padding:12px 14px;border-radius:14px;border:1px solid rgba(40,92,61,.18);background:#fff;cursor:pointer}
+.preset-card:active{background:#f2f7f3}
+.preset-name{font-weight:700;font-size:14px;line-height:1.25}
+.preset-sub{font-size:12px;color:#6b7d70}
+.preset-stock{font-size:10px;color:#285c3d;background:#e8f0ea;border-radius:6px;padding:1px 6px}
+.stock-alert{background:#fdeae5;border-color:#f0b3a2;color:#a4432f;font-weight:700}
+.stock-list{padding:4px 0}
+.stock-row{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #f0f0ec}
+.stock-row:last-child{border-bottom:none}
+.stock-dot{font-size:15px}
+.stock-name{flex:1;font-weight:600;font-size:14px;display:flex;flex-direction:column}
+.stock-name small{font-weight:400;color:#8a978d;font-size:11px}
+.stock-days{font-weight:700;font-size:13px;color:#285c3d;white-space:nowrap}

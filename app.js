@@ -78,8 +78,56 @@ async function refreshMenu(silent){
     if(!silent)alert('Could not reach the sheet. The saved product list is still in use.');
   }
 }
+
+/* ── 経費プリセット ───────────────────────────────
+   シートの Expense Preset が正。取れなければキャッシュ、それも無ければ空。
+   空のときは EXPENSE 画面が従来の手入力フォームに戻る(レジが止まらないように)。 */
+const PRESETS={rows:[],source:'none',fetchedAt:null};
+function initPresets(){
+  const c=SheetSync.cachedPresets();
+  if(c){PRESETS.rows=c.presets;PRESETS.source='cache';PRESETS.fetchedAt=c.fetchedAt}
+  refreshPresets(true);
+}
+async function refreshPresets(silent){
+  try{
+    const r=await SheetSync.fetchPresets();
+    PRESETS.rows=r.presets;PRESETS.source='sheet';PRESETS.fetchedAt=r.fetchedAt;
+    if(!silent)alert('Expense list updated.');
+    if(state.view==='expense')render();
+  }catch(e){
+    console.warn('preset fetch failed:',e);
+    if(!silent)alert('Could not reach the sheet. The saved expense list is still in use.');
+  }
+}
+function presetCategories(){const s=[];PRESETS.rows.forEach(p=>{if(!s.includes(p.category))s.push(p.category)});return s}
+function catShort(c){return String(c||'').split('/')[0].trim()}
+
+/* ── 在庫 ─────────────────────────────────────── */
+const INVENTORY={rows:[],source:'none',fetchedAt:null};
+function initInventory(){
+  const c=SheetSync.cachedInventory();
+  if(c){INVENTORY.rows=c.items;INVENTORY.source='cache';INVENTORY.fetchedAt=c.fetchedAt}
+  refreshInventory(true);
+}
+async function refreshInventory(silent){
+  try{
+    const r=await SheetSync.fetchInventory();
+    INVENTORY.rows=r.items;INVENTORY.source='sheet';INVENTORY.fetchedAt=r.fetchedAt;
+    if(!silent)alert('Stock updated.');
+    if(state.view==='stock')render();
+  }catch(e){
+    console.warn('inventory fetch failed:',e);
+    if(!silent)alert('Could not reach the sheet. Showing the saved stock figures.');
+  }
+}
+function stockCategories(){const s=[];INVENTORY.rows.forEach(i=>{if(!s.includes(i.category))s.push(i.category)});return s}
+function lowStock(){return INVENTORY.rows.filter(i=>i.days!==null&&i.reorder>0&&i.days<i.reorder)}
+function stampLabel(iso){
+  if(!iso)return 'not yet';
+  const d=new Date(iso);return `${dateKey(d)} ${timeKey(d)}`;
+}
 const EXPENSES=['Ice','Water','Breakfast / Meal','Tissue / Supplies','Staff Advance','Ingredient Purchase','Delivery','Other'];
-const state={view:'home',cart:[],selectedProduct:null,selectedSize:null,selectedDiscount:0,selectedQty:0,payment:'CASH',historyTab:'sales',historyDetailDate:null,editingOrderId:null,editingExpenseId:null,reportMonth:null,recipeId:null,orderDateTime:null,quickOptions:{},menuCategory:null};
+const state={view:'home',cart:[],selectedProduct:null,selectedSize:null,selectedDiscount:0,selectedQty:0,payment:'CASH',historyTab:'sales',historyDetailDate:null,editingOrderId:null,editingExpenseId:null,reportMonth:null,recipeId:null,orderDateTime:null,quickOptions:{},menuCategory:null,expCat:null,expPreset:null,expPacks:1,expNew:false,stockCat:null,stockOnlyLow:false};
 const $=s=>document.querySelector(s);
 const peso=n=>'₱'+Number(n||0).toLocaleString('en-PH');
 const pad=n=>String(n).padStart(2,'0');
@@ -138,7 +186,7 @@ function productCartQty(name){return state.cart.filter(item=>item.name===name).r
 function updateOrderBadge(){const badge=document.querySelector('[data-order-badge]');if(!badge)return;const qty=cartQty();badge.textContent=qty>99?'99+':String(qty);badge.hidden=qty===0;badge.setAttribute('aria-label',`Current order quantity ${qty}`)}
 function navActive(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===state.view));updateOrderBadge()}
 function syncTopbarHeight(){const h=document.querySelector('.topbar')?.offsetHeight||68;document.documentElement.style.setProperty('--topbar-h',`${h}px`)}
-function render(){const app=$('#app'); if(state.view==='home') app.innerHTML=homeView(); if(state.view==='order') app.innerHTML=orderView(); if(state.view==='expense') app.innerHTML=expenseView(); if(state.view==='sales') app.innerHTML=salesView(); if(state.view==='close') app.innerHTML=closeView(); if(state.view==='report') app.innerHTML=reportView(); if(state.view==='recipe') app.innerHTML=recipeView(); if(state.view==='history') app.innerHTML=historyView(); syncTopbarHeight(); bind(); navActive();}
+function render(){const app=$('#app'); if(state.view==='home') app.innerHTML=homeView(); if(state.view==='order') app.innerHTML=orderView(); if(state.view==='expense') app.innerHTML=expenseView(); if(state.view==='sales') app.innerHTML=salesView(); if(state.view==='close') app.innerHTML=closeView(); if(state.view==='report') app.innerHTML=reportView(); if(state.view==='recipe') app.innerHTML=recipeView(); if(state.view==='history') app.innerHTML=historyView(); if(state.view==='stock') app.innerHTML=stockView(); syncTopbarHeight(); bind(); navActive();}
 function staffCardHTML(){const list=staffList(),cur=currentStaff();return `<div class="card"><div class="section-title">👤 Staff on Duty</div><select id="staffSelect" class="input"><option value="">-- Select --</option>${list.map(n=>`<option value="${n}" ${n===cur?'selected':''}>${n}</option>`).join('')}</select><button class="btn" data-add-staff style="width:100%;margin-top:8px">+ Add Staff</button></div>`}
 function homeView(){const t=totals();return `${staffCardHTML()}<div class="card hero"><div class="label">TODAY SALES</div><div class="big">${peso(t.sales)}</div><div class="row"><span>${t.cups} items sold</span><span>${dateKey()}</span></div></div><div class="grid2"><button class="btn primary" data-go="order">🧋 ORDER<br><small>Take an order</small></button><button class="btn alt" data-go="expense">🧺 EXPENSE<br><small>Record a cost</small></button><button class="btn" data-go="report">📊 REPORT<br><small>This month</small></button><button class="btn action-red" data-go="close">🔒 CLOSE DAY<br><small>Count the cash</small></button></div><button class="btn btn-wide" data-go="recipe">📖 RECIPES<br><small>What goes in each cup</small></button><div class="card"><div class="section-title">Today’s Summary <small class="muted">(shared register — includes all shifts)</small></div><div class="row"><span>Cash</span><b>${peso(t.cash)}</b></div><div class="row"><span>GCash</span><b>${peso(t.gcash)}</b></div><div class="row"><span>Expenses</span><b>${peso(t.exp)}</b></div><div class="row"><span>Net</span><b>${peso(t.net)}</b></div></div>`}
 function quickOption(i){
@@ -197,7 +245,119 @@ function orderView(){
 }
 function productDetailView(){const p=state.selectedProduct; const sizes=sizesOf(p); const size=state.selectedSize||sizes[0]; const base=menuPrice(p.name,size);return `<button class="btn product-detail-back" data-back>← Back to Products</button><div class="section-title product-detail-title">Order Details</div><div class="card product-detail-card"><div class="product"><div class="picon">${p.icon}</div><div><div class="pname">${p.name}</div><div class="price">${peso(base)}</div></div></div><div class="field"><label>Size</label><div class="chips">${sizes.map(s=>`<button class="chip ${s===size?'active':''}" data-size="${s}">${s}</button>`).join('')}</div></div><div class="field"><label>Quantity</label><div class="qty-control"><button class="qty-btn" data-qty-minus aria-label="Decrease quantity">−</button><input class="qty-input" id="productQty" type="number" inputmode="numeric" min="0" max="99" value="${state.selectedQty}" /><button class="qty-btn" data-qty-plus aria-label="Increase quantity">＋</button></div><small class="muted">Change this when ordering multiple units of the same item.</small></div><div class="field"><label>Discount (per item)</label><div class="chips">${(canDiscount(p,size)?[0,30]:[0]).map(d=>`<button class="chip ${d===state.selectedDiscount?'active':''}" data-discount="${d}">${d?peso(d)+' OFF':'None'}</button>`).join('')}</div>${(!canDiscount(p,size))?'<small class="muted">₱30 OFF applies to 22oz matcha drinks only</small>':''}</div><div class="row" style="margin:12px 0"><span>Item Total</span><b class="total">${peso((base-state.selectedDiscount)*state.selectedQty)}</b></div><button class="btn primary" style="width:100%" data-add>ADD TO ORDER</button></div>`}
 function checkoutView(){const subtotal=state.cart.reduce((a,b)=>a+b.price*b.qty,0),disc=state.cart.reduce((a,b)=>a+b.discount*b.qty,0),total=subtotal-disc;const dt=state.orderDateTime||dateTimeLocalValue();const isEdit=!!state.editingOrderId;return `<div class="section-title">${isEdit?'Edit Order':'Order Review'}</div>${isEdit?`<div class="notice">You are editing a past order. Saving will automatically recalculate sales for that date.</div>`:''}<div class="card list">${state.cart.map((i,idx)=>`<div class="item"><div class="row"><div><b>${i.name}</b><br><small>${i.size}${i.discount?` / ${i.discountLabel||peso(i.discount)+' OFF'} each`:''}</small><div class="cart-qty"><button data-cart-minus="${idx}">−</button><span>${i.qty}</span><button data-cart-plus="${idx}">＋</button></div></div><div class="right"><b>${peso((i.price-i.discount)*i.qty)}</b><br><button class="btn danger" style="padding:5px 8px" data-remove="${idx}">Remove</button></div></div></div>`).join('')}</div><button class="btn" style="width:100%;margin-bottom:12px" data-add-more>＋ Add / Change Items</button><div class="card"><div class="row"><span>Subtotal</span><b>${peso(subtotal)}</b></div><div class="row"><span>Discount</span><b>-${peso(disc)}</b></div><div class="row"><span>Total</span><span class="total">${peso(total)}</span></div><div class="field"><label>Order Date & Time</label><input class="input" id="orderDateTime" type="datetime-local" value="${dt}" /><small class="muted">For a missed entry, change this to the actual order date and time.</small></div><div class="field"><label>Payment Method</label><div class="grid2"><button class="btn ${state.payment==='CASH'?'primary':''}" data-pay="CASH">CASH</button><button class="btn ${state.payment==='GCASH'?'primary':''}" data-pay="GCASH">GCASH</button></div></div><button class="btn ${isEdit?'primary':'action-red'}" style="width:100%" data-complete>${isEdit?'SAVE CHANGES':'COMPLETE ORDER'}</button>${isEdit?`<button class="btn" style="width:100%;margin-top:8px" data-cancel-edit>CANCEL EDIT</button>`:''}</div>`}
-function expenseView(){const ed=state.editingExpenseId?expenses().find(x=>x.id===state.editingExpenseId):null;return `<div class="section-title">${ed?'Edit Expense':'Record Expense'}</div>${ed?`<div class="card" style="padding:10px 14px;margin-bottom:10px"><small class="muted">Editing: ${ed.date} ${ed.time} / -${peso(ed.amount)}</small></div>`:''}<div class="card"><div class="field"><label>Category</label><select id="expCat">${EXPENSES.map(x=>`<option ${ed&&ed.category===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Amount</label><input class="input" id="expAmount" inputmode="decimal" placeholder="e.g. 120" value="${ed?ed.amount:''}" /></div><div class="field"><label>Payment Method</label><select id="expPay"><option ${ed&&ed.payment==='CASH'?'selected':''}>CASH</option><option ${ed&&ed.payment==='GCASH'?'selected':''}>GCASH</option></select></div><div class="field"><label>Memo</label><input class="input" id="expMemo" placeholder="e.g. Ice 20kg" value="${ed?String(ed.memo||'').replaceAll('"','&quot;'):''}" /></div><button class="btn primary" style="width:100%" data-save-exp>${ed?'UPDATE EXPENSE':'SAVE EXPENSE'}</button>${ed?'<button class="btn" style="width:100%;margin-top:8px" data-cancel-exp-edit>Cancel Edit</button>':''}</div>`}
+function expenseView(){
+  const ed=state.editingExpenseId?expenses().find(x=>x.id===state.editingExpenseId):null;
+  if(ed)return expenseEditView(ed);
+  if(state.expNew)return expenseNewView();
+  if(state.expPreset)return expenseDetailView();
+  if(!PRESETS.rows.length)return expenseEditView(null);   // プリセットが無ければ従来の手入力
+  const cats=presetCategories();
+  const list=PRESETS.rows.filter(p=>!state.expCat||p.category===state.expCat);
+  return `<div class="section-title">Record Expense</div>
+  <div class="product-picker-help">Tap what you bought</div>
+  <div class="menu-tabs">
+    <button class="menu-tab ${state.expCat?'':'active'}" data-exp-cat="">ALL</button>
+    ${cats.map(c=>`<button class="menu-tab ${state.expCat===c?'active':''}" data-exp-cat="${c}">${catShort(c)}</button>`).join('')}
+  </div>
+  <div class="preset-grid">${list.map((p,i)=>{
+    const idx=PRESETS.rows.indexOf(p);
+    return `<button class="preset-card" data-preset="${idx}">
+      <span class="preset-name">${p.name}</span>
+      <span class="preset-sub">${p.price?peso(p.price):'—'}${p.buyUnit?' / '+p.buyUnit:''}</span>
+      ${p.ingId?'<span class="preset-stock">在庫連動</span>':''}
+    </button>`}).join('')}</div>
+  <button class="btn btn-wide" data-exp-new>＋ 新しい品目</button>
+  <div class="menu-meta">
+    <small class="muted">Expense list synced: ${stampLabel(PRESETS.fetchedAt)}</small>
+    <button class="btn menu-refresh-btn" data-preset-refresh>🔄 Refresh</button>
+  </div>`;
+}
+
+function expenseDetailView(){
+  const p=state.expPreset,n=Math.max(1,Number(state.expPacks)||1);
+  const amt=Math.round((Number(p.price)||0)*n*100)/100;
+  const qty=(p.qtyPerUnit!=null)?p.qtyPerUnit*n:null;
+  return `<button class="btn product-detail-back" data-exp-back>← Back</button>
+  <div class="section-title">${p.name}</div>
+  <div class="card">
+    <div class="field"><label>個数 ${p.buyUnit?'('+p.buyUnit+')':''}</label>
+      <div class="qty-control">
+        <button class="qty-btn" data-exp-minus>−</button>
+        <input class="qty-input" id="expPacks" type="number" inputmode="numeric" min="1" max="999" value="${n}" />
+        <button class="qty-btn" data-exp-plus>＋</button>
+      </div></div>
+    <div class="field"><label>金額</label>
+      <input class="input" id="expAmount" inputmode="decimal" value="${amt||''}" />
+      <small class="muted">単価 ${peso(p.price)} × ${n}。値が違えば直してください</small></div>
+    ${qty!=null?`<div class="row"><span>在庫に加算</span><b>${qty.toLocaleString()} ${p.baseUnit}</b></div>`:''}
+    <div class="field"><label>Payment</label>
+      <div class="grid2">
+        <button class="btn ${state.payment==='CASH'?'primary':''}" data-exp-pay="CASH">CASH</button>
+        <button class="btn ${state.payment==='GCASH'?'primary':''}" data-exp-pay="GCASH">GCASH</button>
+      </div></div>
+    <div class="field"><label>Memo</label><input class="input" id="expMemo" placeholder="任意" /></div>
+    <button class="btn primary" style="width:100%" data-save-preset-exp>SAVE EXPENSE</button>
+  </div>`;
+}
+
+function expenseNewView(){
+  const cats=presetCategories();
+  const all=cats.length?cats:['Ingredients / 材料','Packaging / 資材','Labor / 人件費','Ice / 氷','Other / その他'];
+  return `<button class="btn product-detail-back" data-exp-back>← Back</button>
+  <div class="section-title">新しい品目</div>
+  <div class="notice" style="margin-bottom:10px">品目名だけ入れてください。容量や在庫の設定はあとでシート側で行います。</div>
+  <div class="card">
+    <div class="field"><label>品目名</label><input class="input" id="expNewName" placeholder="例: Chocolate Sauce" /></div>
+    <div class="field"><label>カテゴリー</label><select id="expNewCat">${all.map(c=>`<option value="${c}">${c}</option>`).join('')}</select></div>
+    <div class="field"><label>個数</label><input class="input" id="expNewPacks" inputmode="numeric" value="1" /></div>
+    <div class="field"><label>金額</label><input class="input" id="expAmount" inputmode="decimal" placeholder="e.g. 350" /></div>
+    <div class="field"><label>Payment</label>
+      <div class="grid2">
+        <button class="btn ${state.payment==='CASH'?'primary':''}" data-exp-pay="CASH">CASH</button>
+        <button class="btn ${state.payment==='GCASH'?'primary':''}" data-exp-pay="GCASH">GCASH</button>
+      </div></div>
+    <div class="field"><label>Memo</label><input class="input" id="expMemo" placeholder="任意" /></div>
+    <button class="btn primary" style="width:100%" data-save-new-exp>SAVE EXPENSE</button>
+  </div>`;
+}
+
+function expenseEditView(ed){
+  return `<div class="section-title">${ed?'Edit Expense':'Record Expense'}</div>${ed?`<div class="card" style="padding:10px 14px;margin-bottom:10px"><small class="muted">Editing: ${ed.date} ${ed.time} / -${peso(ed.amount)}</small></div>`:'<div class="notice" style="margin-bottom:10px">プリセットが取得できていません。手入力で記録します。</div>'}<div class="card"><div class="field"><label>Category</label><select id="expCat">${EXPENSES.map(x=>`<option ${ed&&ed.category===x?'selected':''}>${x}</option>`).join('')}</select></div><div class="field"><label>Amount</label><input class="input" id="expAmount" inputmode="decimal" placeholder="e.g. 120" value="${ed?ed.amount:''}" /></div><div class="field"><label>Payment Method</label><select id="expPay"><option ${ed&&ed.payment==='CASH'?'selected':''}>CASH</option><option ${ed&&ed.payment==='GCASH'?'selected':''}>GCASH</option></select></div><div class="field"><label>Memo</label><input class="input" id="expMemo" placeholder="e.g. Ice 20kg" value="${ed?String(ed.memo||'').replaceAll('"','&quot;'):''}" /></div><button class="btn primary" style="width:100%" data-save-exp>${ed?'UPDATE EXPENSE':'SAVE EXPENSE'}</button>${ed?'<button class="btn" style="width:100%;margin-top:8px" data-cancel-exp-edit>Cancel Edit</button>':''}</div>`;
+}
+
+/* ── 在庫画面 ─────────────────────────────────── */
+function stockView(){
+  const cats=stockCategories();
+  const low=lowStock();
+  let list=INVENTORY.rows.filter(i=>!state.stockCat||i.category===state.stockCat);
+  if(state.stockOnlyLow)list=low.slice();
+  list=list.slice().sort((a,b)=>{
+    const da=a.days===null?9999:a.days,db=b.days===null?9999:b.days;return da-db;});
+  if(!INVENTORY.rows.length)return `<div class="section-title">Stock</div>
+    <div class="notice">在庫データがありません。シート側で棚卸を済ませてから 🔄 を押してください。</div>
+    <div class="menu-meta"><small class="muted">Stock synced: ${stampLabel(INVENTORY.fetchedAt)}</small>
+    <button class="btn menu-refresh-btn" data-stock-refresh>🔄 Refresh</button></div>`;
+  return `<div class="section-title">Stock</div>
+  ${low.length?`<div class="notice stock-alert">🔴 買い出しが必要: ${low.length}品目</div>`:''}
+  <div class="menu-tabs">
+    <button class="menu-tab ${(!state.stockCat&&!state.stockOnlyLow)?'active':''}" data-stock-cat="">ALL</button>
+    <button class="menu-tab ${state.stockOnlyLow?'active':''}" data-stock-low>🛒 買い出し</button>
+    ${cats.map(c=>`<button class="menu-tab ${state.stockCat===c?'active':''}" data-stock-cat="${c}">${catShort(c)}</button>`).join('')}
+  </div>
+  <div class="card list stock-list">${list.map(i=>{
+    const dot=i.days===null?'⚪':(i.reorder&&i.days<i.reorder?'🔴':(i.reorder&&i.days<i.reorder*2?'🟡':'🟢'));
+    const days=i.days===null?'—':(i.days<100?i.days.toFixed(1)+'日':'十分');
+    return `<div class="stock-row">
+      <span class="stock-dot">${dot}</span>
+      <span class="stock-name">${i.name}<small>${Math.round(i.stock).toLocaleString()} ${i.unit}</small></span>
+      <span class="stock-days">${days}</span>
+    </div>`}).join('')}</div>
+  <div class="menu-meta">
+    <small class="muted">Stock synced: ${stampLabel(INVENTORY.fetchedAt)}</small>
+    <button class="btn menu-refresh-btn" data-stock-refresh>🔄 Refresh</button>
+  </div>`;
+}
+
 function salesView(){const t=totals();return `<div class="section-title">Today’s Sales</div><div class="grid2"><div class="card"><div class="label">TOTAL SALES</div><div class="total">${peso(t.sales)}</div></div><div class="card"><div class="label">ITEMS SOLD</div><div class="total">${t.cups}</div></div><div class="card"><div class="label">CASH</div><div class="total">${peso(t.cash)}</div></div><div class="card"><div class="label">GCASH</div><div class="total">${peso(t.gcash)}</div></div><div class="card"><div class="label">EXPENSE</div><div class="total">${peso(t.exp)}</div></div><div class="card"><div class="label">NET</div><div class="total">${peso(t.net)}</div></div></div>`}
 function closeView(){const t=totals();const last=closings().filter(x=>x.date===dateKey()).at(-1);return `<div class="section-title">Close Day & Reconcile</div><div class="notice" style="margin-bottom:12px">CLOSE DAY does not delete sales history. It only saves the end-of-day reconciliation.</div><div class="card"><div class="row"><span>Total Sales</span><b>${peso(t.sales)}</b></div><div class="row"><span>Total Expense</span><b>${peso(t.exp)}</b></div><div class="row"><span>Net Sales</span><b>${peso(t.net)}</b></div><hr><div class="row"><span>Cash Sales</span><b>${peso(t.cash)}</b></div><div class="row"><span>Cash Expense</span><b>${peso(t.cashExp)}</b></div><div class="row"><span>Expected Cash</span><b>${peso(t.expectedCash)}</b></div><div class="field"><label>Actual Cash</label><input class="input" id="actualCash" inputmode="decimal" value="${last?.actualCash??t.expectedCash}" /></div><button class="btn action-red" style="width:100%" data-close-day>CLOSE DAY</button>${last?`<div class="notice" style="margin-top:12px">Previous reconciliation difference: <b>${peso(last.difference)}</b></div>`:''}</div>`}
 function historyProductIcon(name){return PRODUCTS.find(p=>p.name===name)?.icon||'•'}
@@ -210,11 +370,59 @@ function beginEditOrder(id){const o=orders().find(x=>x.id===id);if(!o)return; if
 function cancelOrderEdit(){state.editingOrderId=null;state.orderDateTime=null;state.cart=[];state.payment='CASH';setView('history')}
 function bind(){updateOrderBadge();
   document.querySelectorAll('[data-menu-cat]').forEach(b=>b.onclick=()=>{state.menuCategory=b.dataset.menuCat||null;render()});
+  document.querySelectorAll('[data-exp-cat]').forEach(b=>b.onclick=()=>{state.expCat=b.dataset.expCat||null;render()});
+  document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{
+    state.expPreset=PRESETS.rows[+b.dataset.preset];state.expPacks=1;state.payment=state.expPreset.pay||'CASH';render()});
+  const expBack=$('[data-exp-back]');if(expBack)expBack.onclick=()=>{state.expPreset=null;state.expNew=false;render()};
+  const expNew=$('[data-exp-new]');if(expNew)expNew.onclick=()=>{state.expNew=true;state.expPreset=null;render()};
+  const em=$('[data-exp-minus]');if(em)em.onclick=()=>{state.expPacks=Math.max(1,(Number($('#expPacks').value)||1)-1);render()};
+  const ep=$('[data-exp-plus]');if(ep)ep.onclick=()=>{state.expPacks=Math.min(999,(Number($('#expPacks').value)||1)+1);render()};
+  const ei=$('#expPacks');if(ei)ei.onchange=()=>{state.expPacks=Math.max(1,Math.min(999,Number(ei.value)||1));render()};
+  document.querySelectorAll('[data-exp-pay]').forEach(b=>b.onclick=()=>{state.payment=b.dataset.expPay;render()});
+  const pr=$('[data-preset-refresh]');if(pr)pr.onclick=()=>{pr.disabled=true;pr.textContent='…';refreshPresets(false).then(()=>render())};
+  document.querySelectorAll('[data-stock-cat]').forEach(b=>b.onclick=()=>{state.stockCat=b.dataset.stockCat||null;state.stockOnlyLow=false;render()});
+  const sl=$('[data-stock-low]');if(sl)sl.onclick=()=>{state.stockOnlyLow=!state.stockOnlyLow;state.stockCat=null;render()};
+  const sr=$('[data-stock-refresh]');if(sr)sr.onclick=()=>{sr.disabled=true;sr.textContent='…';refreshInventory(false).then(()=>render())};
+  const spe=$('[data-save-preset-exp]');
+  if(spe)spe.onclick=()=>{
+    const p=state.expPreset;const packs=Math.max(1,Number($('#expPacks').value)||1);
+    const amount=Number($('#expAmount').value);
+    if(!amount)return alert('Please enter an amount.');
+    if(!currentStaff())return alert('Please select the staff on duty before recording an expense.');
+    const now=new Date();
+    const rec={id:crypto.randomUUID(),date:dateKey(now),time:timeKey(now),
+      category:p.name,sheetCategory:p.category,item:p.name,
+      amount,payment:state.payment,memo:$('#expMemo').value||'',staff:currentStaff(),
+      ingId:p.ingId||'',qty:(p.qtyPerUnit!=null?p.qtyPerUnit*packs:''),packs,buyUnit:p.buyUnit||'',
+      unitPrice:p.price||''};
+    const arr=expenses();arr.push(rec);save('chaen_expenses',arr);
+    SheetSync.expenseAdd(rec);
+    addAudit({action:'expense_add',expenseId:rec.id,after:rec});
+    state.expPreset=null;state.expPacks=1;
+    alert('Expense recorded.');setView('home')};
+  const sne=$('[data-save-new-exp]');
+  if(sne)sne.onclick=()=>{
+    const name=($('#expNewName').value||'').trim();
+    if(!name)return alert('品目名を入れてください。');
+    const amount=Number($('#expAmount').value);
+    if(!amount)return alert('Please enter an amount.');
+    if(!currentStaff())return alert('Please select the staff on duty before recording an expense.');
+    const cat=$('#expNewCat').value;const packs=Math.max(1,Number($('#expNewPacks').value)||1);
+    const now=new Date();
+    const rec={id:crypto.randomUUID(),date:dateKey(now),time:timeKey(now),
+      category:name,sheetCategory:cat,item:name,
+      amount,payment:state.payment,memo:$('#expMemo').value||'',staff:currentStaff(),
+      ingId:'',qty:'',packs,buyUnit:'',unitPrice:Math.round(amount/packs*100)/100,draft:true};
+    const arr=expenses();arr.push(rec);save('chaen_expenses',arr);
+    SheetSync.expenseAdd(rec);
+    addAudit({action:'expense_add_new',expenseId:rec.id,after:rec});
+    state.expNew=false;
+    alert('記録しました。シートの Expense Preset に下書きが追加されます。');setView('home')};
   const mrf=$('[data-menu-refresh]');
   if(mrf)mrf.onclick=()=>{mrf.disabled=true;mrf.textContent='Refreshing\u2026';refreshMenu(false).then(()=>render())};
 const ss=$('#staffSelect');if(ss)ss.onchange=()=>{setCurrentStaff(ss.value);render()};const as=$('[data-add-staff]');if(as)as.onclick=()=>{const name=(prompt('Staff name')||'').trim();if(!name)return;addStaffMember(name);setCurrentStaff(name);render()};document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{state.editingExpenseId=null;state.recipeId=null;setView(b.dataset.go)});document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{state.editingExpenseId=null;state.recipeId=null;setView(b.dataset.view)});document.querySelectorAll('[data-quick-pay]').forEach(b=>b.onclick=()=>{state.payment=b.dataset.quickPay;render()});document.querySelectorAll('[data-quick-size]').forEach(b=>b.onclick=()=>{const i=+b.dataset.quickSize,q=quickOption(i);q.size=b.dataset.sizeValue;if(q.size!=='22oz')q.discountPct=0;render()});document.querySelectorAll('[data-quick-minus]').forEach(b=>b.onclick=()=>{const i=+b.dataset.quickMinus;const q=quickOption(i);q.qty=Math.max(0,q.qty-1);render()});document.querySelectorAll('[data-quick-plus]').forEach(b=>b.onclick=()=>{const i=+b.dataset.quickPlus;const q=quickOption(i);q.qty=Math.min(99,q.qty+1);render()});document.querySelectorAll('[data-quick-discount]').forEach(b=>b.onclick=()=>{const i=+b.dataset.quickDiscount;quickOption(i).discountPct=+b.dataset.discountValue;render()});document.querySelectorAll('[data-quick-add]').forEach(b=>b.onclick=()=>{const i=+b.dataset.quickAdd,p=PRODUCTS[i],q=quickOption(i);if(q.qty<=0)return alert('Please set quantity to 1 or more.');const price=quickPrice(p,q.size),discount=(canDiscount(p,q.size))?q.discountPct:0,item={name:p.name,size:q.size,price,qty:q.qty,discount,discountLabel:discount?`₱30 OFF`:''};const same=state.cart.find(x=>x.name===item.name&&x.size===item.size&&x.discount===item.discount);if(same)same.qty=Math.min(99,same.qty+item.qty);else state.cart.push(item);state.quickOptions[i]={size:defaultSize(p),qty:0,discountPct:0};render()});document.querySelectorAll('[data-product]').forEach(el=>el.onclick=()=>{state.selectedProduct=PRODUCTS[+el.dataset.product];state.selectedSize=null;state.selectedDiscount=0;state.selectedQty=0;render()});const back=$('[data-back]');if(back)back.onclick=()=>{state.selectedProduct=null;state.selectedQty=0;render()};document.querySelectorAll('[data-size]').forEach(b=>b.onclick=()=>{state.selectedSize=b.dataset.size;if(state.selectedSize!=='22oz')state.selectedDiscount=0;render()});document.querySelectorAll('[data-discount]').forEach(b=>b.onclick=()=>{state.selectedDiscount=+b.dataset.discount;render()});const qm=$('[data-qty-minus]'),qp=$('[data-qty-plus]'),qi=$('#productQty');if(qm)qm.onclick=()=>{state.selectedQty=Math.max(0,Number(state.selectedQty||0)-1);render()};if(qp)qp.onclick=()=>{state.selectedQty=Math.min(99,Number(state.selectedQty||0)+1);render()};if(qi)qi.onchange=()=>{state.selectedQty=Math.max(0,Math.min(99,Number(qi.value)||0));render()};const add=$('[data-add]');if(add)add.onclick=()=>{const p=state.selectedProduct;const size=state.selectedSize||defaultSize(p);const price=menuPrice(p.name,size);const qty=Math.max(0,Math.min(99,Number(state.selectedQty)||0));if(qty<=0)return alert('Please set quantity to 1 or more.');const discount=(canDiscount(p,size))?state.selectedDiscount:0;state.cart.push({name:p.name,size,price,qty,discount,discountLabel:discount?'₱30 OFF':''});state.selectedProduct=null;state.selectedSize=null;state.selectedDiscount=0;state.selectedQty=0;render()};const co=$('[data-checkout]');if(co)co.onclick=()=>{$('#app').innerHTML=checkoutView();bind()};document.querySelectorAll('[data-pay]').forEach(b=>b.onclick=()=>{state.orderDateTime=$('#orderDateTime')?.value||state.orderDateTime;state.payment=b.dataset.pay;$('#app').innerHTML=checkoutView();bind()});document.querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{state.orderDateTime=$('#orderDateTime')?.value||state.orderDateTime;state.cart.splice(+b.dataset.remove,1);$('#app').innerHTML=checkoutView();bind()});document.querySelectorAll('[data-cart-minus]').forEach(b=>b.onclick=()=>{state.orderDateTime=$('#orderDateTime')?.value||state.orderDateTime;const i=+b.dataset.cartMinus;state.cart[i].qty=Math.max(1,state.cart[i].qty-1);$('#app').innerHTML=checkoutView();bind()});document.querySelectorAll('[data-cart-plus]').forEach(b=>b.onclick=()=>{state.orderDateTime=$('#orderDateTime')?.value||state.orderDateTime;const i=+b.dataset.cartPlus;state.cart[i].qty=Math.min(99,state.cart[i].qty+1);$('#app').innerHTML=checkoutView();bind()});const addMore=$('[data-add-more]');if(addMore)addMore.onclick=()=>{state.orderDateTime=$('#orderDateTime')?.value||state.orderDateTime;state.selectedProduct=null;render()};const comp=$('[data-complete]');if(comp)comp.onclick=()=>{if(!state.cart.length)return alert('Please add an item.');const subtotal=state.cart.reduce((a,b)=>a+b.price*b.qty,0),disc=state.cart.reduce((a,b)=>a+b.discount*b.qty,0);const input=$('#orderDateTime');const raw=input?.value||state.orderDateTime||dateTimeLocalValue();const [d,tRaw]=raw.split('T');const t=(tRaw||'00:00').slice(0,5);const now=new Date();const chosen=new Date(`${d}T${t}:00`);const backdated=(now-chosen)>10*60*1000;const arr=orders();if(state.editingOrderId){const idx=arr.findIndex(x=>x.id===state.editingOrderId);if(idx<0)return alert('The order to edit could not be found.');const before=JSON.parse(JSON.stringify(arr[idx]));arr[idx]={...arr[idx],date:d,time:t,items:JSON.parse(JSON.stringify(state.cart)),total:subtotal-disc,payment:state.payment,backdated:arr[idx].backdated||backdated,editedAt:now.toISOString()};save('chaen_orders',arr);SheetSync.orderEdit(arr[idx]);markClosingNeedsReview(before.date);markClosingNeedsReview(d);addAudit({action:'order_edit',orderId:state.editingOrderId,before,after:arr[idx]});state.editingOrderId=null;state.orderDateTime=null;state.cart=[];state.payment='CASH';alert('Order updated. Sales for that date have been recalculated automatically.');setView('history')}else{if(!currentStaff())return alert('Please select the staff on duty before completing the order.');const rec={id:crypto.randomUUID(),date:d,time:t,items:JSON.parse(JSON.stringify(state.cart)),total:subtotal-disc,payment:state.payment,backdated,staff:currentStaff()};arr.push(rec);save('chaen_orders',arr);SheetSync.orderAdd(rec);if(backdated)markClosingNeedsReview(d);addAudit({action:backdated?'order_backdated_add':'order_add',orderId:rec.id,after:rec});state.cart=[];state.orderDateTime=null;alert(backdated?'Recorded as a backdated order.':'Order recorded.');setView('home')}};const se=$('[data-save-exp]');if(se)se.onclick=()=>{const amount=Number($('#expAmount').value);if(!amount)return alert('Please enter an amount.');const now=new Date();const arr=expenses();if(state.editingExpenseId){const idx=arr.findIndex(x=>x.id===state.editingExpenseId);if(idx<0)return alert('Expense not found.');const before=JSON.parse(JSON.stringify(arr[idx]));arr[idx]={...arr[idx],category:$('#expCat').value,amount,payment:$('#expPay').value,memo:$('#expMemo').value,editedAt:now.toISOString()};save('chaen_expenses',arr);SheetSync.expenseEdit(arr[idx]);addAudit({action:'expense_edit',expenseId:state.editingExpenseId,before,after:arr[idx]});state.editingExpenseId=null;state.historyTab='expense';alert('Expense updated.');setView('history')}else{if(!currentStaff())return alert('Please select the staff on duty before recording an expense.');const expRec={id:crypto.randomUUID(),date:dateKey(now),time:now.toLocaleTimeString('ja-JP',{hour:'2-digit',minute:'2-digit'}),category:$('#expCat').value,amount,payment:$('#expPay').value,memo:$('#expMemo').value,staff:currentStaff()};arr.push(expRec);save('chaen_expenses',arr);SheetSync.expenseAdd(expRec);alert('Expense recorded.');setView('home')}};const cxe=$('[data-cancel-exp-edit]');if(cxe)cxe.onclick=()=>{state.editingExpenseId=null;state.historyTab='expense';setView('history')};const cd=$('[data-close-day]');if(cd)cd.onclick=()=>{const t=totals(),actual=Number($('#actualCash').value||0),difference=actual-t.expectedCash;const arr=closings();const now=new Date();const rec={id:crypto.randomUUID(),date:dateKey(now),time:timeKey(now),actualCash:actual,expectedCash:t.expectedCash,difference,totalSales:t.sales,totalExpense:t.exp,netSales:t.net};arr.push(rec);save('chaen_closings',arr);addAudit({action:'close_day',closingId:rec.id,after:rec});alert(`Day closed\nDifference: ${peso(difference)}\nSales history has been retained.`);render()};document.querySelectorAll('[data-history-tab]').forEach(b=>b.onclick=()=>{state.historyTab=b.dataset.historyTab;state.historyDetailDate=null;render()});document.querySelectorAll('[data-history-detail]').forEach(b=>b.onclick=()=>{state.historyDetailDate=b.dataset.historyDetail;render()});const historyBack=$('[data-history-back]');if(historyBack)historyBack.onclick=()=>{state.historyDetailDate=null;render()};document.querySelectorAll('[data-edit-order]').forEach(b=>b.onclick=()=>beginEditOrder(b.dataset.editOrder));document.querySelectorAll('[data-delete-order]').forEach(b=>b.onclick=()=>{const id=b.dataset.deleteOrder;const arr=orders();const idx=arr.findIndex(x=>x.id===id);if(idx<0)return alert('Order not found.');const o=arr[idx];if(!confirm(`Delete this order?\n${o.date} ${o.time} / ${peso(o.total)}\n\nThis will recalculate the sales total for that date.`))return;arr.splice(idx,1);save('chaen_orders',arr);SheetSync.orderDelete(id);markClosingNeedsReview(o.date);addAudit({action:'order_delete',orderId:id,before:o});alert('Order deleted. Sales for that date have been recalculated.');render()});document.querySelectorAll('[data-recipe-open]').forEach(b=>b.onclick=()=>{state.recipeId=b.dataset.recipeOpen;render()});document.querySelectorAll('[data-recipe-size]').forEach(b=>b.onclick=()=>{state.recipeId=b.dataset.recipeSize;render()});const rb=$('[data-recipe-back]');if(rb)rb.onclick=()=>{state.recipeId=null;render()};document.querySelectorAll('[data-month-shift]').forEach(b=>b.onclick=()=>{const cur=state.reportMonth||monthKey();const next=shiftMonth(cur,+b.dataset.monthShift);if(next>monthKey())return;state.reportMonth=next;render()});const et=$('[data-edit-target]');if(et)et.onclick=()=>{const v=prompt('Monthly sales goal (PHP)',String(monthTarget()));if(v===null)return;const n=Number(v);if(!n||n<0)return alert('Enter a number greater than 0.');localStorage.setItem(REPORT_TARGET_KEY,String(n));render()};const oc=$('[data-open-cash]');if(oc)oc.onchange=()=>{setOpeningBalance(state.reportMonth||monthKey(),{cash:Number(oc.value)||0});render()};const og=$('[data-open-gcash]');if(og)og.onchange=()=>{setOpeningBalance(state.reportMonth||monthKey(),{gcash:Number(og.value)||0});render()};document.querySelectorAll('[data-edit-expense]').forEach(b=>b.onclick=()=>{state.editingExpenseId=b.dataset.editExpense;setView('expense')});document.querySelectorAll('[data-delete-expense]').forEach(b=>b.onclick=()=>{const id=b.dataset.deleteExpense;const arr=expenses();const idx=arr.findIndex(x=>x.id===id);if(idx<0)return alert('Expense not found.');const e=arr[idx];if(!confirm(`Delete this expense?\n${e.date} ${e.time} / ${e.category} / ${peso(e.amount)}`))return;arr.splice(idx,1);save('chaen_expenses',arr);SheetSync.expenseDelete(id);addAudit({action:'expense_delete',expenseId:id,before:e});alert('Expense deleted.');render()});const cancelEdit=$('[data-cancel-edit]');if(cancelEdit)cancelEdit.onclick=cancelOrderEdit;const dtInput=$('#orderDateTime');if(dtInput)dtInput.onchange=()=>{state.orderDateTime=dtInput.value};const ex=$('[data-export]');if(ex)ex.onclick=exportCSV;}
 function exportCSV(){const rows=[['type','date','time','description','payment','amount']];orders().forEach(o=>rows.push(['sale',o.date,o.time,o.items.map(i=>`${i.name} ${i.size}`).join(' + '),o.payment,o.total]));expenses().forEach(e=>rows.push(['expense',e.date,e.time,`${e.category} ${e.memo||''}`.trim(),e.payment,-e.amount]));const csv='\ufeff'+rows.map(r=>r.map(v=>`"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download=`chaen-pos-${dateKey()}.csv`;a.click();URL.revokeObjectURL(a.href)}
-setInterval(()=>{$('#clock').textContent=new Date().toLocaleString('ja-JP',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})},1000);initMenu();render();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');syncFromSheet();setInterval(syncFromSheet,30000);
+setInterval(()=>{$('#clock').textContent=new Date().toLocaleString('ja-JP',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})},1000);initMenu();initPresets();initInventory();render();if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');syncFromSheet();setInterval(syncFromSheet,30000);
 
 /* ===== v1.19: REPORT (monthly dashboard) ===== */
 const REPORT_TARGET_KEY='chaen_month_target';
