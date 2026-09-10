@@ -1,4 +1,4 @@
-/* CHAEN POS → Google Sheets 連携モジュール (v1.23)
+/* CHAEN POS → Google Sheets 連携モジュール (v1.24)
    デプロイ後に URL / TOKEN を設定。STOREは店舗が増えたら端末ごとに変更。
    v1.20: 同じレジをシフト交代で共有する運用に対応。注文・経費に時刻を送信し、
    fetchTodayData() で本日分の注文・経費をまとめて取得できるようにした。
@@ -7,7 +7,10 @@
    v1.23: 商品マスターをシートに一本化。fetchProducts() で Recipe Master の
           商品リストを取得し、localStorageにキャッシュする。取得できた場合は
           Recipe ID の対応表もシート由来のものを優先して使う(下の RECIPE_IDS は
-          初回起動時・通信不能時のフォールバックとして残す)。 */
+          初回起動時・通信不能時のフォールバックとして残す)。
+   v1.24: 在庫管理に対応。fetchPresets() で経費プリセット、fetchInventory() で
+          残在庫を取得する(どちらもlocalStorageにキャッシュ)。経費の送信に
+          材料ID・入庫数量・個数・仕入単位・下書きフラグを追加した。 */
 const SheetSync = (() => {
   const CONFIG = {
     URL: 'https://script.google.com/macros/s/AKfycbzm3znIf4AtO3u3tG7EZQ634M_7tHNGk3O8rWXNSLc_bziA0VTLIJKmKjEZrLOIgRV80Q/exec', // ← Apps ScriptのウェブアプリURL
@@ -62,6 +65,8 @@ const SheetSync = (() => {
 
   const QUEUE_KEY = 'chaen_sheet_queue';
   const MENU_KEY  = 'chaen_menu_cache';
+  const PRESET_KEY = 'chaen_preset_cache';
+  const INV_KEY    = 'chaen_inventory_cache';
 
   /* シートから取得した 商品名|サイズ → Recipe ID。取得できるまでは null。 */
   let dynamicIds = null;
@@ -128,6 +133,47 @@ const SheetSync = (() => {
     return payload;
   }
 
+  /* 経費プリセットを取得してキャッシュする */
+  async function fetchPresets() {
+    if (!CONFIG.ENABLED) throw new Error('sheet sync disabled');
+    const url = `${CONFIG.URL}?action=expensepresets&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'presets fetch error');
+    const presets = j.presets || [];
+    if (!presets.length) throw new Error('empty preset list');
+    const payload = { fetchedAt: new Date().toISOString(), presets };
+    try { localStorage.setItem(PRESET_KEY, JSON.stringify(payload)); } catch (e) {}
+    return payload;
+  }
+  function cachedPresets() {
+    try {
+      const v = JSON.parse(localStorage.getItem(PRESET_KEY) || 'null');
+      if (v && Array.isArray(v.presets) && v.presets.length) return v;
+    } catch (e) {}
+    return null;
+  }
+
+  /* 在庫を取得してキャッシュする */
+  async function fetchInventory() {
+    if (!CONFIG.ENABLED) throw new Error('sheet sync disabled');
+    const url = `${CONFIG.URL}?action=inventory&token=${encodeURIComponent(CONFIG.TOKEN)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'inventory fetch error');
+    const items = j.items || [];
+    const payload = { fetchedAt: new Date().toISOString(), items };
+    try { localStorage.setItem(INV_KEY, JSON.stringify(payload)); } catch (e) {}
+    return payload;
+  }
+  function cachedInventory() {
+    try {
+      const v = JSON.parse(localStorage.getItem(INV_KEY) || 'null');
+      if (v && Array.isArray(v.items)) return v;
+    } catch (e) {}
+    return null;
+  }
+
   /* キャッシュ済みの商品リストを返す(なければ null) */
   function cachedProducts() {
     try {
@@ -170,6 +216,25 @@ const SheetSync = (() => {
     }
   }
 
+  /* 経費の送信内容を組み立てる。
+     rec.sheetCategory があればプリセット経由(シートのカテゴリー名そのまま)、
+     無ければ従来の EXPENSE_CATS 変換を使う。 */
+  function expensePayload(type, rec) {
+    const viaPreset = !!rec.sheetCategory;
+    return {
+      type: type, expenseId: rec.id, store: CONFIG.STORE,
+      date: rec.date, time: rec.time || '', staff: rec.staff || '',
+      category: viaPreset ? rec.sheetCategory : (EXPENSE_CATS[rec.category] || 'Other / その他'),
+      item: viaPreset ? (rec.item || rec.category) : rec.category,
+      amount: rec.amount, pay: rec.payment, notes: rec.memo || '',
+      ingId: rec.ingId || '', qty: rec.qty || '',
+      packs: (rec.packs === undefined ? '' : rec.packs),
+      buyUnit: rec.buyUnit || '',
+      unitPrice: rec.unitPrice || '',
+      draft: !!rec.draft
+    };
+  }
+
   window.addEventListener('online', flushQueue);
   window.addEventListener('load', flushQueue);
 
@@ -178,6 +243,10 @@ const SheetSync = (() => {
     lookupRecipe,                  // シート由来を優先した逆引き
     fetchProducts,
     cachedProducts,
+    fetchPresets,
+    cachedPresets,
+    fetchInventory,
+    cachedInventory,
     fetchTodayData,
     orderAdd(rec) {
       post({ type: 'order_add', orderId: rec.id, store: CONFIG.STORE,
@@ -191,16 +260,10 @@ const SheetSync = (() => {
       post({ type: 'order_delete', orderId: id });
     },
     expenseAdd(rec) {
-      post({ type: 'expense', expenseId: rec.id, store: CONFIG.STORE, date: rec.date, time: rec.time || '', staff: rec.staff || '',
-             category: EXPENSE_CATS[rec.category] || 'Other / その他',
-             item: rec.category, amount: rec.amount, pay: rec.payment,
-             notes: rec.memo || '' });
+      post(expensePayload('expense', rec));
     },
     expenseEdit(rec) {
-      post({ type: 'expense_edit', expenseId: rec.id, store: CONFIG.STORE, date: rec.date, time: rec.time || '', staff: rec.staff || '',
-             category: EXPENSE_CATS[rec.category] || 'Other / その他',
-             item: rec.category, amount: rec.amount, pay: rec.payment,
-             notes: rec.memo || '' });
+      post(expensePayload('expense_edit', rec));
     },
     expenseDelete(id) {
       post({ type: 'expense_delete', expenseId: id });
