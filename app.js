@@ -22,9 +22,9 @@ const FALLBACK_MENU=[
 {id:'NUT22',name:'Nutella Matcha Latte',size:'22oz',category:'Matcha',price:300},
 {id:'CHU5',name:'Churros',size:'5pcs',category:'Churros',price:110}
 ];
-const ICONS={'Signature Matcha Latte':'🍵','Matcha Cloud Latte':'☁️','Einspanner Matcha Latte':'🥛','Matcha Mango':'🥭','Matcha Strawberry':'🍓','Matcha Oreo':'🍪','Matcha Sea Salt':'🧂','Nutella Matcha Latte':'🍫','Matcha Frappe':'🥤','Churros':'🥖','Milky Oreo':'🍪','Chocolate Milk':'🍫','Strawberry Milk':'🍓','Mango Milky Latte':'🥭','Chocolate Frappe':'🍫','Oreo Frappe':'🍪'};
-const CAT_ICON={Matcha:'🍵',Milky:'🥛',Frappe:'🥤',Churros:'🥖'};
-const CAT_ORDER=['Matcha','Milky','Frappe','Churros'];
+const ICONS={'Signature Matcha Latte':'🍵','Matcha Cloud Latte':'☁️','Einspanner Matcha Latte':'🥛','Matcha Mango':'🥭','Matcha Strawberry':'🍓','Matcha Oreo':'🍪','Matcha Sea Salt':'🧂','Nutella Matcha Latte':'🍫','Matcha Frappe':'🥤','Churros':'🥖','Milky Oreo':'🍪','Chocolate Milk':'🍫','Strawberry Milk':'🍓','Mango Milky Latte':'🥭','Chocolate Frappe':'🍫','Oreo Frappe':'🍪','Spanish Latte':'☕','Caramel Macchiato':'🍮','Sea Salt Latte':'🧂','White Chocolate Mocha':'🤍','Mocha Frappe':'🥤','Einspanner Latte':'🥛','Iced Black Coffee':'🧊'};
+const CAT_ICON={Matcha:'🍵',Coffee:'☕',Milky:'🥛',Frappe:'🥤',Churros:'🥖'};
+const CAT_ORDER=['Matcha','Coffee','Milky','Frappe','Churros'];
 const MENU={rows:[],source:'fallback',fetchedAt:null};
 let PRODUCTS=[];
 function iconOf(name,cat){return ICONS[name]||CAT_ICON[cat]||'🥤'}
