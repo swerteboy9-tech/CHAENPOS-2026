@@ -1,5 +1,5 @@
 /**
- * CHAEN POS → Google Sheets 連携 受け口スクリプト v6
+ * CHAEN POS → Google Sheets 連携 受け口スクリプト v10
  * 設置場所: 管理スプレッドシートの [拡張機能] > [Apps Script]
  *
  * v2: POSでの注文「編集・削除」をシートに反映(R列のPOS Order IDで照合)。
@@ -14,6 +14,17 @@
  *     シート側でも把握できるようにした。
  * v8: 経費にもスタッフ名(P列)を追加記録。どのスタッフが記録した経費かを
  *     把握できるようにした。
+ * v10: 在庫管理に対応。
+ *      - doGet に action=expensepresets（経費プリセット配信）と
+ *        action=inventory（残在庫配信）を追加。
+ *      - 経費に 材料ID / 入庫数量 / 個数 / 仕入単位 を記録（Q〜T列）。
+ *        これで Inventory シートの「入庫」が自動で積み上がる。
+ *      - 未登録の品目をPOSから登録すると Expense Preset に
+ *        下書き行（有効=FALSE / 要確認）が自動で追加される。
+ *      - doPost の売上まわりには手を入れていない。
+ * v9: doGet に action=products を追加。Recipe Master の先頭行(商品名がある行)だけを
+ *     読んで商品リストをJSONで返す。POSがこれを取得してボタンを生成する。
+ *     doPost(売上・経費の書き込み)には一切手を入れていない。
  *Expense LogのI列にPOS Expense IDを記録し、
  *  削除時は該当行のA〜I列をクリアする。
  *  ※行ごと削除しない理由: 同じ行の右側(J〜N列)に経費サマリー表が
@@ -29,6 +40,17 @@ const COL_ORDER_STAFF = 20; // Daily Product Sales T列(v7で追加。対応し�
 const COL_EXPENSE_ID   = 9;  // Expense Log I列
 const COL_EXPENSE_TIME  = 15; // Expense Log O列(v6で追加。J〜N列は経費サマリー表のため使用不可)
 const COL_EXPENSE_STAFF = 16; // Expense Log P列(v8で追加。記録したスタッフ名)
+const SHEET_RECIPE     = 'Recipe Master';
+const RECIPE_FIRST_ROW = 5;  // Recipe Master のデータ開始行(1〜4はヘッダー)
+const SHEET_PRESET     = 'Expense Preset';
+const PRESET_FIRST_ROW = 5;
+const SHEET_INV        = 'Inventory';
+const INV_FIRST_ROW    = 6;
+// Expense Log の追加列(J〜Nは経費サマリー表、O=時刻、P=スタッフで使用済み)
+const COL_EXP_INGID = 17; // Q 材料ID
+const COL_EXP_QTY   = 18; // R 入庫数量(基本単位)
+const COL_EXP_PACKS = 19; // S 個数
+const COL_EXP_UNIT  = 20; // T 仕入単位
 
 function doPost(e) {
   try {
@@ -124,7 +146,100 @@ function doGet(e) {
       return jsonOut({ ok: false, error: String(err) });
     }
   }
-  return jsonOut({ ok: true, message: 'CHAEN POS endpoint alive (v8)' });
+  if (p.action === 'products') {
+    // 商品マスターは Recipe Master が正。POSは起動時にここから取得してボタンを生成する。
+    // tokenは任意(商品リストは機微情報ではない)。渡された場合だけ検証する。
+    if (p.token && p.token !== TOKEN) return jsonOut({ ok: false, error: 'auth' });
+    try {
+      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const sh = ss.getSheetByName(SHEET_RECIPE);
+      const last = sh.getLastRow();
+      const products = [];
+      if (last >= RECIPE_FIRST_ROW) {
+        const rows = sh.getRange(RECIPE_FIRST_ROW, 1, last - RECIPE_FIRST_ROW + 1, 5).getValues();
+        rows.forEach(function (r) {
+          const id       = String(r[0] == null ? '' : r[0]).trim();
+          const name     = String(r[1] == null ? '' : r[1]).trim();
+          const size     = String(r[2] == null ? '' : r[2]).trim();
+          const category = String(r[3] == null ? '' : r[3]).trim();
+          const price    = r[4];
+          if (!id || !name) return;                         // 材料の継続行(商品名が空)はスキップ
+          if (price === '' || price === null) return;        // 売価が空の行はスキップ
+          const n = Number(price);
+          if (!isFinite(n) || n <= 0) return;
+          products.push({ id: id, name: name, size: size, category: category || 'Other', price: n });
+        });
+      }
+      return jsonOut({ ok: true, updatedAt: new Date().toISOString(), products: products });
+    } catch (err) {
+      return jsonOut({ ok: false, error: String(err) });
+    }
+  }
+
+  if (p.action === 'expensepresets') {
+    // POSの EXPENSE 画面に出すボタンの一覧。有効=TRUE の行だけ返す。
+    if (p.token && p.token !== TOKEN) return jsonOut({ ok: false, error: 'auth' });
+    try {
+      const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_PRESET);
+      if (!sh) return jsonOut({ ok: true, updatedAt: new Date().toISOString(), presets: [] });
+      const last = sh.getLastRow();
+      const out = [];
+      if (last >= PRESET_FIRST_ROW) {
+        const rows = sh.getRange(PRESET_FIRST_ROW, 1, last - PRESET_FIRST_ROW + 1, 11).getValues();
+        rows.forEach(function (r) {
+          if (r[0] !== true && String(r[0]).toUpperCase() !== 'TRUE') return; // 有効のみ
+          const name = String(r[3] == null ? '' : r[3]).trim();
+          const cat  = String(r[2] == null ? '' : r[2]).trim();
+          if (!name || !cat) return;
+          out.push({
+            order:    Number(r[1]) || 0,
+            category: cat,
+            name:     name,
+            buyUnit:  String(r[4] == null ? '' : r[4]).trim(),
+            qtyPerUnit: (r[5] === '' || r[5] == null) ? null : Number(r[5]),
+            baseUnit: String(r[6] == null ? '' : r[6]).trim(),
+            price:    Number(r[7]) || 0,
+            pay:      String(r[8] == null ? '' : r[8]).trim() || 'CASH',
+            ingId:    String(r[9] == null ? '' : r[9]).trim()
+          });
+        });
+      }
+      out.sort(function (a, b) { return a.order - b.order; });
+      return jsonOut({ ok: true, updatedAt: new Date().toISOString(), presets: out });
+    } catch (err) { return jsonOut({ ok: false, error: String(err) }); }
+  }
+
+  if (p.action === 'inventory') {
+    // Inventory シートの計算結果をそのまま返す。POSは表示するだけ。
+    if (p.token && p.token !== TOKEN) return jsonOut({ ok: false, error: 'auth' });
+    try {
+      const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_INV);
+      if (!sh) return jsonOut({ ok: true, updatedAt: new Date().toISOString(), items: [] });
+      const last = sh.getLastRow();
+      const out = [];
+      if (last >= INV_FIRST_ROW) {
+        const rows = sh.getRange(INV_FIRST_ROW, 1, last - INV_FIRST_ROW + 1, 13).getValues();
+        rows.forEach(function (r) {
+          const id = String(r[0] == null ? '' : r[0]).trim();
+          const name = String(r[1] == null ? '' : r[1]).trim();
+          if (!id || !name) return;
+          out.push({
+            id: id, name: name,
+            category: String(r[2] == null ? '' : r[2]).trim(),
+            unit:     String(r[3] == null ? '' : r[3]).trim(),
+            stock:    Number(r[7]) || 0,
+            perDay:   Number(r[8]) || 0,
+            days:     (r[9] === '' || r[9] == null) ? null : Number(r[9]),
+            reorder:  Number(r[10]) || 0,
+            status:   String(r[11] == null ? '' : r[11]).trim()
+          });
+        });
+      }
+      return jsonOut({ ok: true, updatedAt: new Date().toISOString(), items: out });
+    } catch (err) { return jsonOut({ ok: false, error: String(err) }); }
+  }
+
+  return jsonOut({ ok: true, message: 'CHAEN POS endpoint alive (v10)' });
 }
 
 /** シートの日付セル(Date型 or 文字列)を 'yyyy-MM-dd' に統一する */
@@ -184,6 +299,40 @@ function writeExpense(ss, d) {
   sh.getRange(row, COL_EXPENSE_TIME).setValue(d.time || '');
   // P: 記録したスタッフ名(v8)
   sh.getRange(row, COL_EXPENSE_STAFF).setValue(d.staff || '');
+  // Q〜T: 在庫連動用(v10)。材料IDが無い経費(人件費など)は空のまま。
+  sh.getRange(row, COL_EXP_INGID).setValue(d.ingId || '');
+  sh.getRange(row, COL_EXP_QTY).setValue(d.ingId ? (Number(d.qty) || '') : '');
+  sh.getRange(row, COL_EXP_PACKS).setValue(d.packs === undefined ? '' : d.packs);
+  sh.getRange(row, COL_EXP_UNIT).setValue(d.buyUnit || '');
+
+  // 未登録の品目なら Expense Preset に下書きを積む(v10)
+  if (d.draft) addPresetDraft_(ss, d);
+}
+
+/** POSから登録された未登録品目を、Expense Preset に「要確認」の下書きとして追加する。
+ *  すでに同じカテゴリー・同じ表示名の行があれば何もしない。 */
+function addPresetDraft_(ss, d) {
+  try {
+    const sh = ss.getSheetByName(SHEET_PRESET);
+    if (!sh) return;
+    const name = String(d.item || '').trim();
+    if (!name) return;
+    const last = sh.getLastRow();
+    let maxOrder = 0;
+    if (last >= PRESET_FIRST_ROW) {
+      const rows = sh.getRange(PRESET_FIRST_ROW, 1, last - PRESET_FIRST_ROW + 1, 11).getValues();
+      for (let i = 0; i < rows.length; i++) {
+        if (String(rows[i][3]).trim() === name && String(rows[i][2]).trim() === String(d.category).trim()) return;
+        maxOrder = Math.max(maxOrder, Number(rows[i][1]) || 0);
+      }
+    }
+    sh.getRange(last + 1, 1, 1, 11).setValues([[
+      false, maxOrder + 10, d.category || '', name, d.buyUnit || '',
+      '', '', Number(d.unitPrice) || Number(d.amount) || 0, d.pay || 'CASH', '',
+      'POSから登録 要確認 (' + (d.date || '') + ')'
+    ]]);
+    sh.getRange(last + 1, 1, 1, 11).setBackground('#ffe9e0');
+  } catch (e) { /* 下書きに失敗しても経費の記録は成立させる */ }
 }
 
 /** I列の経費IDが一致する行のA〜I列・O列(時刻)・P列(スタッフ)をクリア(J〜N列のサマリー表は残す) */
